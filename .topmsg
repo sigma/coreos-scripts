@@ -1,0 +1,4 @@
+From: Yann Hodique <hodiquey@vmware.com>
+Subject: [PATCH] t/feature/ovfenv-vars
+
+OVF environment variables for VMware deployments
