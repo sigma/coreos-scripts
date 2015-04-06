@@ -33,6 +33,7 @@ VALID_IMG_TYPES=(
     hyperv
     secure_demo
     niftycloud
+    cloudsigma
 )
 
 #list of oem package names, minus the oem- prefix
@@ -51,6 +52,7 @@ VALID_OEM_PACKAGES=(
     vagrant-key
     vmware
     niftycloud
+    cloudsigma
 )
 
 # Set at runtime to one of the above types
@@ -233,6 +235,10 @@ IMG_niftycloud_DISK_FORMAT=vmdk_scsi
 IMG_niftycloud_DISK_LAYOUT=vm
 IMG_niftycloud_CONF_FORMAT=niftycloud
 IMG_niftycloud_OEM_PACKAGE=oem-niftycloud
+
+## cloudsigma
+IMG_cloudsigma_DISK_FORMAT=qcow2
+IMG_cloudsigma_OEM_PACKAGE=oem-cloudsigma
 
 ###########################################################
 
@@ -469,6 +475,11 @@ _write_cpio_common() {
         # Inject /usr/.noupdate into squashfs to disable update_engine
         echo "/.noupdate f 444 root root echo -n" >"${VM_TMP_DIR}/extra"
     fi
+
+    # Set correct group for PXE/ISO, which has no writeable /etc
+    echo /usr/share/coreos/update.conf f 644 root root \
+        "sed -e 's/GROUP=.*$/GROUP=${VM_GROUP}/' ${base_dir}/share/coreos/update.conf" \
+        >> "${VM_TMP_DIR}/extra"
 
     # Build the squashfs, embed squashfs into a gzipped cpio
     pushd "${cpio_target}" >/dev/null
