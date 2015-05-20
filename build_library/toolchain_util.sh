@@ -15,6 +15,7 @@ TOOLCHAIN_PKGS=(
 # compiler to build a full native toolchain. Packages are not uploaded.
 declare -A CROSS_PROFILES
 CROSS_PROFILES["x86_64-cros-linux-gnu"]="coreos:coreos/amd64/generic"
+CROSS_PROFILES["aarch64-cros-linux-gnu"]="coreos:coreos/arm64/generic"
 
 # Map board names to CHOSTs and portage profiles. This is the
 # definitive list, there is assorted code new and old that either
@@ -22,6 +23,10 @@ CROSS_PROFILES["x86_64-cros-linux-gnu"]="coreos:coreos/amd64/generic"
 declare -A BOARD_CHOSTS BOARD_PROFILES
 BOARD_CHOSTS["amd64-usr"]="x86_64-cros-linux-gnu"
 BOARD_PROFILES["amd64-usr"]="coreos:coreos/amd64/generic"
+
+BOARD_CHOSTS["arm64-usr"]="aarch64-cros-linux-gnu"
+BOARD_PROFILES["arm64-usr"]="coreos:coreos/arm64/generic"
+
 BOARD_NAMES=( "${!BOARD_CHOSTS[@]}" )
 
 # Declare the above globals as read-only to avoid accidental conflicts.
@@ -38,7 +43,7 @@ declare -r \
 # Usage: get_portage_arch chost
 get_portage_arch() {
     case "$1" in
-        aarch64*)   echo arm;;
+        aarch64*)   echo arm64;;
         alpha*)     echo alpha;;
         arm*)       echo arm;;
         hppa*)      echo hppa;;
@@ -172,6 +177,35 @@ get_binonly_args() {
 
 ### Toolchain building utilities ###
 
+# Create the crossdev overlay and repos.conf entry.
+# crossdev will try to setup this itself but doesn't do everything needed
+# to make the newer repos.conf based configuration system happy. This can
+# probably go away if crossdev itself is improved.
+configure_crossdev_overlay() {
+    local root="$1"
+    local location="$2"
+
+    # may be called from either catalyst (root) or update_chroot (user)
+    local sudo="env"
+    if [[ $(id -u) -ne 0 ]]; then
+        sudo="sudo -E"
+    fi
+
+    $sudo mkdir -p "${root}${location}/"{profiles,metadata}
+    echo "x-crossdev" | \
+        $sudo tee "${root}${location}/profiles/repo_name" > /dev/null
+    $sudo tee "${root}${location}/metadata/layout.conf" > /dev/null <<EOF
+masters = portage-stable coreos
+use-manifests = true
+thin-manifests = true
+EOF
+
+    $sudo tee "${root}/etc/portage/repos.conf/crossdev.conf" > /dev/null <<EOF
+[x-crossdev]
+location = ${location}
+EOF
+}
+
 # Ugly hack to get a dependency list of a set of packages.
 # This is required to figure out what to install in the crossdev sysroot.
 # Usage: ROOT=/foo/bar _get_dependency_list pkgs... [--portage-opts...]
@@ -187,7 +221,8 @@ _get_dependency_list() {
 
 # Configure a new ROOT
 # Values are copied from the environment or the current host configuration.
-# Usage: ROOT=/foo/bar SYSROOT=/foo/bar configure_portage coreos:some/profile
+# Usage: CBUILD=foo-bar-linux-gnu ROOT=/foo/bar SYSROOT=/foo/bar configure_portage coreos:some/profile
+# Note: if using portageq to get CBUILD it must be called before CHOST is set.
 _configure_sysroot() {
     local profile="$1"
 
@@ -197,7 +232,8 @@ _configure_sysroot() {
         sudo="sudo -E"
     fi
 
-    $sudo mkdir -p "${ROOT}/etc/portage"
+    $sudo mkdir -p "${ROOT}/etc/portage/"{profile,repos.conf}
+    $sudo cp /etc/portage/repos.conf/* "${ROOT}/etc/portage/repos.conf/"
     $sudo eselect profile set --force "$profile"
 
     $sudo tee "${ROOT}/etc/portage/make.conf" >/dev/null <<EOF
@@ -237,6 +273,16 @@ install_cross_toolchain() {
     local sudo="env"
     if [[ $(id -u) -ne 0 ]]; then
         sudo="sudo -E"
+    fi
+
+    # crossdev will arbitrarily choose an overlay that it finds first.
+    # Force it to use the one created by configure_crossdev_overlay
+    local cross_overlay=$(portageq get_repo_path / x-crossdev)
+    if [[ -n "${cross_overlay}" ]]; then
+        cross_flags+=( --ov-output "${cross_overlay}" )
+    else
+        echo "No x-crossdev overlay found!" >&2
+        return 1
     fi
 
     # Only call crossdev to regenerate configs if something has changed
@@ -279,7 +325,10 @@ install_cross_libs() {
         sudo="sudo -E"
     fi
 
-    CHOST="${cross_chost}" ROOT="$ROOT" SYSROOT="$ROOT" \
+    CBUILD="$(portageq envvar CBUILD)" \
+        CHOST="${cross_chost}" \
+        ROOT="$ROOT" \
+        SYSROOT="$ROOT" \
         _configure_sysroot "${CROSS_PROFILES[${cross_chost}]}"
 
     # In order to get a dependency list we must calculate it before

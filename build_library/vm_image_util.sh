@@ -7,11 +7,13 @@
 
 VALID_IMG_TYPES=(
     ami
+    ami_vmdk
     pxe
     iso
     openstack
     qemu
     qemu_uefi
+    qemu_uefi_secure
     qemu_xen
     rackspace
     rackspace_onmetal
@@ -115,6 +117,10 @@ IMG_qemu_uefi_DISK_FORMAT=qcow2
 IMG_qemu_uefi_DISK_LAYOUT=vm
 IMG_qemu_uefi_CONF_FORMAT=qemu_uefi
 
+IMG_qemu_uefi_secure_DISK_FORMAT=qcow2
+IMG_qemu_uefi_secure_DISK_LAYOUT=vm
+IMG_qemu_uefi_secure_CONF_FORMAT=qemu_uefi_secure
+
 IMG_qemu_xen_DISK_FORMAT=qcow2
 IMG_qemu_xen_DISK_LAYOUT=vm
 IMG_qemu_xen_CONF_FORMAT=qemu_xen
@@ -166,6 +172,9 @@ IMG_vmware_insecure_OEM_PACKAGE=oem-vagrant-key
 ## ami
 IMG_ami_OEM_PACKAGE=oem-ec2-compat
 IMG_ami_OEM_USE=ec2
+IMG_ami_vmdk_DISK_FORMAT=vmdk_stream
+IMG_ami_vmdk_OEM_PACKAGE=oem-ec2-compat
+IMG_ami_vmdk_OEM_USE=ec2
 
 ## openstack, supports ec2's metadata format so use oem-ec2-compat
 IMG_openstack_DISK_FORMAT=qcow2
@@ -231,7 +240,7 @@ IMG_secure_demo_DISK_FORMAT=secure_demo
 IMG_secure_demo_CONF_FORMAT=qemu_uefi
 
 ## niftycloud
-IMG_niftycloud_DISK_FORMAT=vmdk_scsi
+IMG_niftycloud_DISK_FORMAT=vmdk_stream
 IMG_niftycloud_DISK_LAYOUT=vm
 IMG_niftycloud_CONF_FORMAT=niftycloud
 IMG_niftycloud_OEM_PACKAGE=oem-niftycloud
@@ -335,6 +344,7 @@ _disk_ext() {
         cpio) echo cpio.gz;;
         vmdk_ide) echo vmdk;;
         vmdk_scsi) echo vmdk;;
+        vmdk_stream) echo vmdk;;
         secure_demo) echo bin;;
         *) echo "${disk_format}";;
     esac
@@ -448,6 +458,16 @@ _write_vmdk_ide_disk() {
 
 _write_vmdk_scsi_disk() {
     qemu-img convert -f raw "$1" -O vmdk -o adapter_type=lsilogic "$2"
+    assert_image_size "$2" vmdk
+}
+
+_write_vmdk_stream_disk() {
+    # requires two pass conversion, qemu-img doesn't properly support the
+    # stream-optimized VMDK format. The special vmdk-convert tool only takes
+    # VMDK images as an import format.
+    local tmpvmdk="${VM_TMP_DIR}/tmp.vmdk"
+    qemu-img convert -f raw "$1" -O vmdk -o adapter_type=lsilogic "${tmpvmdk}"
+    vmdk-convert "${tmpvmdk}" "$2"
     assert_image_size "$2" vmdk
 }
 
@@ -588,6 +608,18 @@ _write_qemu_uefi_conf() {
     sed -e "s%^VM_PFLASH_RO=.*%VM_PFLASH_RO='${ovmf_ro}'%" \
         -e "s%^VM_PFLASH_RW=.*%VM_PFLASH_RW='${ovmf_rw}'%" -i "${script}"
     VM_GENERATED_FILES+=( "$(_dst_dir)/${ovmf_ro}" "$(_dst_dir)/${ovmf_rw}" )
+}
+
+_write_qemu_uefi_secure_conf() {
+    local ovmf_rw="$(_dst_name "_ovmf_vars.fd")"
+
+    _write_qemu_uefi_conf
+    cert-to-efi-sig-list "/usr/share/sb_keys/PK.crt" "${VM_TMP_DIR}/PK.esl"
+    cert-to-efi-sig-list "/usr/share/sb_keys/KEK.crt" "${VM_TMP_DIR}/KEK.esl"
+    cert-to-efi-sig-list "/usr/share/sb_keys/DB.crt" "${VM_TMP_DIR}/DB.esl"
+    flash-var "$(_dst_dir)/${ovmf_rw}" "PK" "${VM_TMP_DIR}/PK.esl"
+    flash-var "$(_dst_dir)/${ovmf_rw}" "KEK" "${VM_TMP_DIR}/KEK.esl"
+    flash-var "$(_dst_dir)/${ovmf_rw}" "db" "${VM_TMP_DIR}/DB.esl"
 }
 
 _write_qemu_xen_conf() {
@@ -858,9 +890,6 @@ _write_niftycloud_conf() {
     local dst_name=$(basename "$VM_DST_IMG")
     local dst_dir=$(dirname "$VM_DST_IMG")
     local ovf="${dst_dir}/$(_src_to_dst_name "${src_name}" ".ovf")"
-
-    vmdk-convert ${VM_DST_IMG} ${VM_TMP_DIR}/vm.vmdk
-    mv ${VM_TMP_DIR}/vm.vmdk ${VM_DST_IMG}
 
     "${BUILD_LIBRARY_DIR}/niftycloud_ovf.sh" \
             --vm_name "$VM_NAME" \

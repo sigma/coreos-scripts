@@ -125,16 +125,7 @@ sudo eselect profile set --force "$(get_sdk_profile)"
 
 # Create crossdev repo_name and metadata
 info "Setting up crossdev..."
-sudo mkdir -p "${FLAGS_chroot}/${CROSSDEV_OVERLAY}/profiles"
-echo "x-crossdev" | \
-    sudo tee "/${CROSSDEV_OVERLAY}/profiles/repo_name" > /dev/null
-
-sudo mkdir -p "/${CROSSDEV_OVERLAY}/metadata"
-sudo tee "/${CROSSDEV_OVERLAY}/metadata/layout.conf" > /dev/null <<EOF
-masters = portage-stable coreos
-use-manifests = true
-thin-manifests = true
-EOF
+configure_crossdev_overlay "${FLAGS_chroot}" "${CROSSDEV_OVERLAY}"
 
 # Run version hooks as pre-update
 if [[ -f /etc/os-release ]]; then
@@ -197,6 +188,8 @@ gcc_set_latest_profile "$(portageq envvar CHOST)"
 if [[ "${FLAGS_skip_toolchain_update}" -eq "${FLAGS_FALSE}" && \
       -n "${FLAGS_toolchain_boards}" ]]; then
   CROSS_CHOSTS=( $(get_board_chost ${FLAGS_toolchain_boards} | sort -u) )
+  # double check get_board_chost actually returned results, pipefail isn't set.
+  [[ -n "${CROSS_CHOSTS[*]}" ]] || exit 1
 
   for cross_chost in "${CROSS_CHOSTS[@]}"; do
     info "Updating cross ${cross_chost} toolchain"

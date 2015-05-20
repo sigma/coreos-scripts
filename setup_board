@@ -39,9 +39,6 @@ DEFINE_boolean toolchainpkgonly $FLAGS_FALSE \
   "Use binary packages only for the board toolchain."
 DEFINE_integer jobs "${NUM_JOBS}" \
   "How many packages to build in parallel at maximum."
-DEFINE_boolean latest_toolchain $FLAGS_FALSE \
-  "Use the latest ebuild for all toolchain packages (gcc, binutils, libc, \
-kernel). This overrides the other toolchain version options."
 DEFINE_string libc_version "[stable]" \
   "Version of libc to use."
 DEFINE_boolean quiet $FLAGS_FALSE \
@@ -92,7 +89,7 @@ generate_all_wrappers() {
   info "Generating wrapper scripts"
 
   for wrapper in 'emerge --root-deps' ebuild eclean equery portageq \
-                 qcheck qfile qlist; do
+                 qcheck qfile qlist emaint; do
     _generate_wrapper ${wrapper}
   done
 
@@ -265,9 +262,15 @@ sudo cp /etc/portage/repos.conf/* "${BOARD_ETC}"/portage/repos.conf/
 
 # make it easy to find debug symbols
 sudo mkdir -p /usr/lib/debug/build
-sudo ln -sfT /build/amd64-usr/usr/lib/debug /usr/lib/debug/build/amd64-usr
+sudo ln -sfT ${BOARD_ROOT}/usr/lib/debug /usr/lib/debug/${BOARD_ROOT}
 
 generate_all_wrappers
+
+# Unclear why this is required but it doesn't happen automatically
+info "Performing package updates..."
+${EMAINT_WRAPPER} --fix movebin
+${EMAINT_WRAPPER} --fix moveinst
+${EMAINT_WRAPPER} --fix world
 
 if [[ ${FLAGS_regen_configs} -eq ${FLAGS_FALSE} ]]; then
   EMERGE_FLAGS="--select --quiet --root-deps=rdeps"
