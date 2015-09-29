@@ -20,6 +20,8 @@ DEFINE_string esp_dir "" \
   "Path to EFI System partition mount point."
 DEFINE_string disk_image "" \
   "The disk image containing the EFI System partition."
+DEFINE_boolean verity ${FLAGS_FALSE} \
+  "Indicates that boot commands should enable dm-verity."
 
 # Parse flags
 FLAGS "$@" || exit 1
@@ -47,6 +49,10 @@ case "${FLAGS_target}" in
     x86_64-xen)
         CORE_NAME="core.elf"
         ;;
+    arm64-efi)
+        CORE_MODULES+=( serial efi_gop )
+        CORE_NAME="core-arm64.efi"
+        ;;
     *)
         die_notrace "Unknown GRUB target ${FLAGS_target}"
         ;;
@@ -70,6 +76,9 @@ cleanup() {
     fi
     if [[ -b "${LOOP_DEV}" ]]; then
         sudo losetup --detach "${LOOP_DEV}"
+    fi
+    if [[ -n "${GRUB_TEMP_DIR}" && -e "${GRUB_TEMP_DIR}" ]]; then
+      rm -r "${GRUB_TEMP_DIR}"
     fi
 }
 trap cleanup EXIT
@@ -116,10 +125,26 @@ set prefix=(memdisk)
 set
 EOF
 
+# Generate a memdisk containing the appropriately generated grub.cfg. Doing
+# this because we need conflicting default behaviors between verity and
+# non-verity images.
+GRUB_TEMP_DIR=$(mktemp -d)
 if [[ ! -f "${ESP_DIR}/coreos/grub/grub.cfg.tar" ]]; then
     info "Generating grub.cfg memdisk"
+
+    if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
+      # use dm-verity for /usr
+      cat "${BUILD_LIBRARY_DIR}/grub.cfg" | \
+        sed 's/@@MOUNTUSR@@/mount.usr=\/dev\/mapper\/usr verity.usr/' > \
+        "${GRUB_TEMP_DIR}/grub.cfg"
+    else
+      # uses standard systemd /usr mount
+      cat "${BUILD_LIBRARY_DIR}/grub.cfg" | \
+        sed 's/@@MOUNTUSR@@/mount.usr/' > "${GRUB_TEMP_DIR}/grub.cfg"
+    fi
+
     sudo tar cf "${ESP_DIR}/coreos/grub/grub.cfg.tar" \
-	 -C "${BUILD_LIBRARY_DIR}" "grub.cfg"
+	 -C "${GRUB_TEMP_DIR}" "grub.cfg"
 fi
 
 info "Generating ${GRUB_DIR}/${CORE_NAME}"
@@ -139,6 +164,10 @@ case "${FLAGS_target}" in
         sudo cp "/usr/lib/grub/i386-pc/boot.img" "${ESP_DIR}/${GRUB_DIR}"
         sudo grub-bios-setup --device-map=/dev/null \
             --directory="${ESP_DIR}/${GRUB_DIR}" "${LOOP_DEV}"
+        # boot.img gets manipulated by grub-bios-setup so it alone isn't
+        # sufficient to restore the MBR boot code if it gets corrupted.
+        sudo dd bs=448 count=1 if="${LOOP_DEV}" \
+            of="${ESP_DIR}/${GRUB_DIR}/mbr.bin"
         ;;
     x86_64-efi)
         info "Installing default x86_64 UEFI bootloader."
@@ -166,6 +195,13 @@ case "${FLAGS_target}" in
             "${ESP_DIR}/xen/pvboot-x86_64.elf"
         sudo cp "${BUILD_LIBRARY_DIR}/menu.lst" \
             "${ESP_DIR}/boot/grub/menu.lst"
+        ;;
+    arm64-efi)
+        info "Installing default arm64 UEFI bootloader."
+        sudo mkdir -p "${ESP_DIR}/EFI/boot"
+        #FIXME(andrejro): shim not ported to aarch64
+        sudo cp "${ESP_DIR}/${GRUB_DIR}/${CORE_NAME}" \
+            "${ESP_DIR}/EFI/boot/bootaa64.efi"
         ;;
 esac
 

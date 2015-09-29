@@ -36,6 +36,8 @@ VALID_IMG_TYPES=(
     secure_demo
     niftycloud
     cloudsigma
+    packet
+    interoute
 )
 
 #list of oem package names, minus the oem- prefix
@@ -55,6 +57,8 @@ VALID_OEM_PACKAGES=(
     vmware
     niftycloud
     cloudsigma
+    packet
+    interoute
 )
 
 # Set at runtime to one of the above types
@@ -160,7 +164,7 @@ IMG_vmware_DISK_LAYOUT=vm
 IMG_vmware_CONF_FORMAT=vmx
 IMG_vmware_OEM_PACKAGE=oem-vmware
 
-## vmware
+## vmware_ova
 IMG_vmware_ova_DISK_FORMAT=vmdk_stream
 IMG_vmware_ova_DISK_LAYOUT=vm
 IMG_vmware_ova_OEM_PACKAGE=oem-vmware
@@ -252,6 +256,16 @@ IMG_niftycloud_OEM_PACKAGE=oem-niftycloud
 ## cloudsigma
 IMG_cloudsigma_DISK_FORMAT=qcow2
 IMG_cloudsigma_OEM_PACKAGE=oem-cloudsigma
+
+## packet
+IMG_packet_OEM_PACKAGE=oem-packet
+
+## interoute
+IMG_interoute_DISK_FORMAT=vmdk_stream
+IMG_interoute_DISK_LAYOUT=interoute
+IMG_interoute_CONF_FORMAT=interoute
+IMG_interoute_OEM_PACKAGE=oem-interoute
+IMG_interoute_BUNDLE_FORMAT=ova
 
 ###########################################################
 
@@ -570,17 +584,23 @@ _write_qemu_common() {
 
     sed -e "s%^VM_NAME=.*%VM_NAME='${VM_NAME}'%" \
         -e "s%^VM_MEMORY=.*%VM_MEMORY='${vm_mem}'%" \
+        -e "s%^VM_BOARD=.*%VM_BOARD='${BOARD}'%" \
         "${BUILD_LIBRARY_DIR}/qemu_template.sh" > "${script}"
     checkbashisms --posix "${script}" || die
     chmod +x "${script}"
 
+    arm64_msg=""
+    if [[ ${BOARD} == "arm64-usr" ]]; then
+        arm64_msg="-bios QEMU_EFI.fd"
+    fi
+
     cat >"${VM_README}" <<EOF
 If you have qemu installed (or in the SDK), you can start the image with:
   cd path/to/image
-  ./$(basename "${script}") -curses
+  ./$(basename "${script}") -curses ${arm64_msg}
 
 If you need to use a different ssh key or different ssh port:
-  ./$(basename "${script}") -a ~/.ssh/authorized_keys -p 2223 -- -curses
+  ./$(basename "${script}") -a ~/.ssh/authorized_keys -p 2223 -- -curses ${arm64_msg}
 
 If you rather you can use the -nographic option instad of -curses. In this
 mode you can switch from the vm to the qemu monitor console with: Ctrl-a c
@@ -589,6 +609,14 @@ See the qemu man page for more details on the monitor console.
 SSH into that host with:
   ssh 127.0.0.1 -p 2222
 EOF
+
+    if [[ ${BOARD} == "arm64-usr" ]]; then
+        cat >>"${VM_README}" <<EOF
+
+A prebuilt QEMU EFI firmware can be downloaded at the following link:
+http://snapshots.linaro.org/components/kernel/leg-virt-tianocore-edk2-upstream/latest/QEMU-AARCH64/RELEASE_GCC48/QEMU_EFI.fd
+EOF
+    fi
 
     VM_GENERATED_FILES+=( "${script}" "${VM_README}" )
 }
@@ -686,7 +714,7 @@ ethernet0.addressType = "generated"
 ethernet0.present = "TRUE"
 ethernet0.virtualDev = "vmxnet3"
 floppy0.present = "FALSE"
-guestOS = "otherlinux-64"
+guestOS = "other26xlinux-64"
 memsize = "${vm_mem}"
 powerType.powerOff = "soft"
 powerType.powerOn = "hard"
@@ -916,6 +944,25 @@ _write_ovf_vmware_conf() {
     local ovf="$(_dst_path ".ovf")"
 
     sed "${BUILD_LIBRARY_DIR}/template_vmware.ovf" \
+        -e "s/@@NAME@@/$(_dst_name)/g" \
+        -e "s/@@VMDK_FILE_NAME@@/$(basename ${VM_DST_IMG})/g" \
+        -e "s/@@VMDK_FILE_SIZE@@/${vmdk_file_size}/g" \
+        -e "s/@@VMDK_CAPACITY@@/${vmdk_capacity}/g" \
+        -e "s/@@NUM_CPUS@@/${vm_cpus}/g" \
+        -e "s/@@MEM_SIZE@@/${vm_mem}/g" \
+        > "${ovf}"
+
+    VM_GENERATED_FILES+=( "$ovf" )
+}
+
+_write_interoute_conf() {
+    local vm_mem="${1:-$(_get_vm_opt MEM)}"
+    local vm_cpus="$(_get_vm_opt CPUS)"
+    local vmdk_file_size=$(du --bytes "${VM_DST_IMG}" | cut -f1)
+    local vmdk_capacity=$(vmdk-convert -i "${VM_DST_IMG}" | jq .capacity)
+    local ovf="$(_dst_path ".ovf")"
+
+    sed "${BUILD_LIBRARY_DIR}/template_interoute.ovf" \
         -e "s/@@NAME@@/$(_dst_name)/g" \
         -e "s/@@VMDK_FILE_NAME@@/$(basename ${VM_DST_IMG})/g" \
         -e "s/@@VMDK_FILE_SIZE@@/${vmdk_file_size}/g" \
